@@ -178,8 +178,8 @@ namespace mongo {
 
         rocksdb::TOTransactionDB* getDB() { return _db.get(); }
         const rocksdb::TOTransactionDB* getDB() const { return _db.get(); }
-        size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
-        std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
+        size_t getBlockCacheUsage() const { return _blockCache->GetUsage(); }
+        std::shared_ptr<rocksdb::Cache> getBlockCache() { return _blockCache; }
 
         RocksCounterManager* getCounterManager() const { return _counterManager.get(); }
 
@@ -192,6 +192,8 @@ namespace mongo {
         void haltOplogManager();
 
         RocksOplogManager* getOplogManager() const { return _oplogManager.get(); }
+
+        ratelimit::RateLimiter* getMongoRateLimiter() { return _mongoRateLimiter; }
 
         /*
          * This function is called when replication has completed a batch.  In this function, we
@@ -216,11 +218,14 @@ namespace mongo {
 
         rocksdb::Options _options() const;
 
+        void _initDatabase();
+
         std::string _path;
         std::unique_ptr<rocksdb::TOTransactionDB> _db;
-        std::shared_ptr<rocksdb::Cache> _block_cache;
+        std::shared_ptr<rocksdb::Cache> _blockCache;
         int _maxWriteMBPerSec;
         std::shared_ptr<rocksdb::RateLimiter> _rateLimiter;
+        ratelimit::RateLimiter* _mongoRateLimiter;
         // can be nullptr
         std::shared_ptr<rocksdb::Statistics> _statistics;
 
@@ -257,6 +262,16 @@ namespace mongo {
         std::unique_ptr<RocksCounterManager> _counterManager;
 
         std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
+
+        // _defaultCf is rocksdb's "default" cf, it holds everything other than oplog
+        // 1. user-collections, user-indexes
+        // 2. mongoRocks' metadata(prefixed with kMetadataPrefix)
+        // 3. dropped data(prefixed with kDroppedPrefix)
+        // 4. table's counters and sizers
+        std::unique_ptr<rocksdb::ColumnFamilyHandle> _defaultCf;
+
+        // _oplogCf holds oplogs
+        std::unique_ptr<rocksdb::ColumnFamilyHandle> _oplogCf;
 
         // Mutex to protect use of _oplogManagerCount by this instance of KV engine.
         mutable stdx::mutex _oplogManagerMutex;
