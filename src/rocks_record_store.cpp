@@ -63,6 +63,7 @@
 #include "rocks_durability_manager.h"
 #include "rocks_engine.h"
 #include "rocks_oplog_manager.h"
+#include "rocks_prepare_conflict.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
@@ -227,7 +228,7 @@ namespace mongo {
         invariant(txn);
 
         std::string oldValue;
-        auto status = ru->Get(key, &oldValue);
+        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(key, &oldValue); });
         invariantRocksOK(status);
         int oldLength = oldValue.size();
 
@@ -362,7 +363,10 @@ namespace mongo {
                 iter.reset(ru->NewIterator(_prefix));
             }
             int64_t storage;
-            iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
+                return iter->status();
+            });
 
             RecordId newestOld;
             while ((sizeSaved < sizeOverCap || docsRemoved < docsOverCap) &&
@@ -403,7 +407,10 @@ namespace mongo {
                     _oplogKeyTracker->deleteKey(ru, newestOld);
                 }
 
-                iter->Next();
+                rocksPrepareConflictRetry(opCtx, [&] {
+                    iter->Next();
+                    return iter->status();
+                });
             }
 
             if (!iter->Valid() && !iter->status().ok()) {
@@ -572,7 +579,7 @@ namespace mongo {
         invariant(txn);
 
         std::string old_value;
-        auto status = ru->Get(key, &old_value);
+        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(key, &old_value); });
         invariantRocksOK(status);
 
         int old_length = old_value.size();
@@ -624,7 +631,15 @@ namespace mongo {
         // we need to delete all records, regardless of visibility)
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_prefix, _isOplog));
-        for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
+        for (rocksPrepareConflictRetry(opCtx,
+                                       [&] {
+                                           iterator->SeekToFirst();
+                                           return iterator->status();
+                                       });
+             iterator->Valid(); rocksPrepareConflictRetry(opCtx, [&] {
+                 iterator->Next();
+                 return iterator->status();
+             })) {
             deleteRecord(opCtx, _makeRecordId(iterator->key()));
         }
 
@@ -747,9 +762,15 @@ namespace mongo {
         // need keys (we never touch the values), so this works nicely
         std::unique_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
         int64_t storage;
-        iter->Seek(_makeKey(startingPosition, &storage));
+        rocksPrepareConflictRetry(opCtx, [&] {
+            iter->Seek(_makeKey(startingPosition, &storage));
+            return iter->status();
+        });
         if (!iter->Valid()) {
-            iter->SeekToLast();
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iter->SeekToLast();
+                return iter->status();
+            });
             if (iter->Valid()) {
                 // startingPosition is bigger than everything else
                 return _makeRecordId(iter->key());
@@ -769,7 +790,10 @@ namespace mongo {
             // RocksDB invariant -- iterator needs to land at or past target when Seek-ing
             invariant(cmp < 0);
             // we're past target -- prev()
-            iter->Prev();
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iter->Prev();
+                return iter->status();
+            });
         }
 
         if (!iter->Valid()) {
@@ -907,7 +931,8 @@ namespace mongo {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
 
         std::string valueStorage;
-        auto status = ru->Get(_makePrefixedKey(prefix, loc), &valueStorage);
+        auto status = rocksPrepareConflictRetry(
+            opCtx, [&] { return ru->Get(_makePrefixedKey(prefix, loc), &valueStorage); });
         if (status.IsNotFound()) {
             return RecordData(nullptr, 0);
         }
@@ -955,7 +980,10 @@ namespace mongo {
         int64_t locStorage;
         auto seekTarget = RocksRecordStore::_makeKey(_lastLoc, &locStorage);
         if (!_iterator->Valid() || _iterator->key() != seekTarget) {
-            _iterator->Seek(seekTarget);
+            rocksPrepareConflictRetry(_opCtx, [&] {
+                _iterator->Seek(seekTarget);
+                return _iterator->status();
+            });
             if (!_iterator->Valid()) {
                 invariantRocksOK(_iterator->status());
             }
@@ -969,7 +997,10 @@ namespace mongo {
             // Seek() lands on or after the key, while reverse cursors need to land on or before.
             if (!_iterator->Valid()) {
                 // Nothing left on or after.
-                _iterator->SeekToLast();
+                rocksPrepareConflictRetry(_opCtx, [&] {
+                    _iterator->SeekToLast();
+                    return _iterator->status();
+                });
                 invariantRocksOK(_iterator->status());
                 _skipNextAdvance = true;
             } else {
@@ -978,7 +1009,10 @@ namespace mongo {
                     // Since iterator is valid and Seek() landed after key,
                     // iterator will still be valid after we call Prev().
                     _skipNextAdvance = true;
-                    _iterator->Prev();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        _iterator->Prev();
+                        return _iterator->status();
+                    });
                 }
             }
         }
@@ -1011,15 +1045,27 @@ namespace mongo {
             if (_needFirstSeek) {
                 _needFirstSeek = false;
                 if (_forward) {
-                    iter->SeekToFirst();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        iter->SeekToFirst();
+                        return iter->status();
+                    });
                 } else {
-                    iter->SeekToLast();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        iter->SeekToLast();
+                        return iter->status();
+                    });
                 }
             } else {
                 if (_forward) {
-                    iter->Next();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        iter->Next();
+                        return iter->status();
+                    });
                 } else {
-                    iter->Prev();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        iter->Prev();
+                        return iter->status();
+                    });
                 }
             }
         }
@@ -1033,9 +1079,10 @@ namespace mongo {
         _skipNextAdvance = false;
         _iterator.reset();
 
-        rocksdb::Status status = RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx)->Get(
-            _makePrefixedKey(_prefix, id), &_seekExactResult);
-
+        rocksdb::Status status = rocksPrepareConflictRetry(_opCtx, [&] {
+            return RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx)->Get(
+                _makePrefixedKey(_prefix, id), &_seekExactResult);
+        });
         if (status.IsNotFound()) {
             _eof = true;
             return {};

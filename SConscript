@@ -28,6 +28,7 @@ env.Library(
         'src/rocks_util.cpp',
         'src/rocks_oplog_manager.cpp',
         'src/rocks_begin_transaction_block.cpp',
+        'src/rocks_prepare_conflict.cpp',
     ],
     LIBDEPS= [
         '$BUILD_DIR/mongo/base',
