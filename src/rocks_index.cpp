@@ -704,7 +704,7 @@ namespace mongo {
                 value.appendTypeBits(encodedKey.getTypeBits());
             }
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
-            invariantRocksOK(ru->getTransaction()->Put(_cf, prefixedKey, valueSlice));
+            invariantRocksOK(ROCKS_OP_CHECK(ru->getTransaction()->Put(_cf, prefixedKey, valueSlice)));
             return Status::OK();
         }
 
@@ -747,7 +747,7 @@ namespace mongo {
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
         auto txn = ru->getTransaction();
         invariant(txn);
-        invariantRocksOK(txn->Put(_cf, prefixedKey, valueVectorSlice));
+        invariantRocksOK(ROCKS_OP_CHECK(txn->Put(_cf, prefixedKey, valueVectorSlice)));
         return Status::OK();
     }
 
@@ -778,7 +778,7 @@ namespace mongo {
             // NOTE(wolfkdy): can only be called when a Get returns NOT_FOUND, to avoid SI's
             // write skew. this function has the semantics of GetForUpdate.
             // DO NOT use this if you dont know if the exists or not.
-            invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+            invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
         };
 
         if (!dupsAllowed) {
@@ -801,7 +801,7 @@ namespace mongo {
                 KeyString::TypeBits::fromBuffer(_keyStringVersion, &br);
                 fassert(90417, !br.remaining());
             }
-            invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+            invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
             _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                         std::memory_order_relaxed);
             return;
@@ -829,7 +829,7 @@ namespace mongo {
                 if (records.empty() && !br.remaining()) {
                     // This is the common case: we are removing the only loc for this key.
                     // Remove the whole entry.
-                    invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+                    invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
                     _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                                 std::memory_order_relaxed);
                     return;
@@ -860,7 +860,7 @@ namespace mongo {
         }
 
         rocksdb::Slice newValueSlice(newValue.getBuffer(), newValue.getSize());
-        invariantRocksOK(transaction->Put(_cf, prefixedKey, newValueSlice));
+        invariantRocksOK(ROCKS_OP_CHECK(transaction->Put(_cf, prefixedKey, newValueSlice)));
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
     }
@@ -935,7 +935,7 @@ namespace mongo {
                                encodedKey.getTypeBits().getSize());
         }
 
-        invariantRocksOK(transaction->Put(_cf, prefixedKey, value));
+        invariantRocksOK(ROCKS_OP_CHECK(transaction->Put(_cf, prefixedKey, value)));
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
 
@@ -969,7 +969,7 @@ namespace mongo {
         if (useSingleDelete) {
             warning() << "mongoRocks4.0+ nolonger supports singleDelete, fallback to Delete";
         }
-        invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+        invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
     }

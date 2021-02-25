@@ -63,7 +63,7 @@ namespace mongo {
             // If the failpoint is enabled, don't call the function, just simulate a conflict.
             auto s = MONGO_FAIL_POINT(RocksPrepareConflictForReads)
                          ? rocksdb::Status::PrepareConflict("prepare conflict")
-                         : (f());
+                         : (ROCKS_READ_CHECK(f));
 
             if (!s.IsPrepareConflict()) return s;
 

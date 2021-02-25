@@ -76,6 +76,7 @@
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
+#include "mongo_rate_limiter_checker.h"
 
 #define ROCKS_TRACE log()
 
@@ -179,6 +180,7 @@ namespace mongo {
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
         : _path(path),
+          _mongoRateLimiter(nullptr),
           _durable(durable),
           _formatVersion(formatVersion),
           _maxPrefix(0),
@@ -205,6 +207,11 @@ namespace mongo {
         if (rocksGlobalOptions.counters) {
             _statistics = rocksdb::CreateDBStatistics();
         }
+
+        log() << "clusterRole is " << static_cast<int>(serverGlobalParams.clusterRole) << ";";
+#ifdef __linux__
+        startMongoRateLimiterChecker();
+#endif
 
         // used in building options for the db
         _compactionScheduler.reset(new RocksCompactionScheduler());
@@ -705,7 +712,8 @@ namespace mongo {
             return;
         }
         // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
-        // provided.  No future queries will need point-in-time reads at a timestamp prior to the one
+        // provided.  No future queries will need point-in-time reads at a timestamp prior to the
+        // one
         // provided here.
         const bool force = false;
         setOldestTimestamp(stableTimestamp, force);

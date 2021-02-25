@@ -91,16 +91,17 @@ namespace mongo {
             invariant(ru);
             auto transaction = ru->getTransaction();
             invariant(transaction);
-            invariantRocksOK(
+            invariantRocksOK(ROCKS_OP_CHECK(
                 transaction->Put(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc),
                                  rocksdb::Slice(reinterpret_cast<const char*>(&lenLittleEndian),
-                                                sizeof(lenLittleEndian))));
+                                                sizeof(lenLittleEndian)))));
         }
         void deleteKey(RocksRecoveryUnit* ru, const RecordId& loc) {
             invariant(ru);
             auto transaction = ru->getTransaction();
             invariant(transaction);
-            invariantRocksOK(transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc)));
+            invariantRocksOK(ROCKS_OP_CHECK(
+                transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc))));
             _deletedKeysSinceCompaction++;
         }
         rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
@@ -170,7 +171,10 @@ namespace mongo {
         bool emptyCollection = !iter->Valid();
         if (!emptyCollection) {
             // if it's not empty, find next RecordId
-            iter->SeekToLast();
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iter->SeekToLast();
+                return iter->status();
+            });
             dassert(iter->Valid());
             rocksdb::Slice lastSlice = iter->key();
             RecordId lastId = _makeRecordId(lastSlice);
@@ -239,7 +243,7 @@ namespace mongo {
         invariantRocksOK(status);
         int oldLength = oldValue.size();
 
-        invariantRocksOK(txn->Delete(_cf, key));
+        invariantRocksOK(ROCKS_OP_CHECK(txn->Delete(_cf, key)));
         if (_isOplog) {
             _oplogKeyTracker->deleteKey(ru, dl);
         }
@@ -391,7 +395,7 @@ namespace mongo {
                 }
 
                 std::string key(_makePrefixedKey(_prefix, newestOld));
-                invariantRocksOK(txn->Delete(_cf, key));
+                invariantRocksOK(ROCKS_OP_CHECK(txn->Delete(_cf, key)));
                 rocksdb::Slice oldValue;
                 ++docsRemoved;
                 if (_isOplog) {
@@ -516,7 +520,8 @@ namespace mongo {
             auto s = opCtx->recoveryUnit()->setTimestamp(ts);
             invariant(s.isOK(), s.reason());
         }
-        invariantRocksOK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len)));
+        invariantRocksOK(
+            ROCKS_OP_CHECK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len))));
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
         }
@@ -592,7 +597,7 @@ namespace mongo {
 
         int old_length = old_value.size();
 
-        invariantRocksOK(txn->Put(_cf, key, rocksdb::Slice(data, len)));
+        invariantRocksOK(ROCKS_OP_CHECK(txn->Put(_cf, key, rocksdb::Slice(data, len))));
 
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
